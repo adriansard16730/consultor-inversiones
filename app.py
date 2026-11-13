@@ -570,7 +570,7 @@ if analizar:
     if rsi is not None and rsi < 40:
         verdes.append(3)
 
-            if not es_fondo:
+        if not es_fondo:
         with st.spinner("Comparando BPA trimestral..."):
             resultado_trimestral = comparar_bpa_trimestral(
                 ticker_fundamental
