@@ -304,10 +304,283 @@ if tipo == "CEDEAR":
     )
 
 analizar = st.button("Analizar instrumento", type="primary")
+
 # ---------- Análisis ----------
 
-if analizar:st.info("El botón funciona. Iniciando el análisis...")
+if analizar:
+    st.info("El botón funciona. Iniciando el análisis...")
 
     if not simbolo:
         st.warning("Primero elegí un resultado o escribí un ticker.")
         st.stop()
+
+    if tipo == "CEDEAR" and not subyacente:
+        st.warning("Indicá el ticker del subyacente.")
+        st.stop()
+
+    ticker_fundamental = (
+        subyacente if tipo == "CEDEAR" else simbolo
+    )
+
+    es_fondo = (
+        tipo == "ETF"
+        or (
+            tipo == "CEDEAR"
+            and tipo_subyacente == "ETF"
+        )
+    )
+
+    with st.spinner("Consultando precios e indicadores..."):
+        info, historial, meta, avisos = cargar_cotizacion(simbolo)
+
+        if ticker_fundamental == simbolo:
+            info_fund = info
+        else:
+            info_fund, _, _, avisos_fund = cargar_cotizacion(
+                ticker_fundamental
+            )
+            avisos += avisos_fund
+
+        anual = pd.DataFrame()
+        ttm = pd.DataFrame()
+
+        if not es_fondo:
+            anual, ttm, avisos_estados = cargar_fundamentales(
+                ticker_fundamental
+            )
+            avisos += avisos_estados
+
+    nombre = primero(
+        info.get("longName"),
+        info.get("shortName"),
+        meta.get("longName"),
+        meta.get("shortName"),
+        simbolo
+    )
+
+    moneda = primero(
+        info.get("currency"),
+        meta.get("currency")
+    )
+
+    precio = numero(primero(
+        info.get("regularMarketPrice"),
+        info.get("currentPrice"),
+        meta.get("regularMarketPrice")
+    ))
+
+    cierres = pd.Series(dtype=float)
+
+    if not historial.empty and "Close" in historial:
+        cierres = historial["Close"].dropna()
+
+    precio_de_historial = False
+
+    if precio is None and not cierres.empty:
+        precio = numero(cierres.iloc[-1])
+        precio_de_historial = True
+
+    st.subheader(f"{nombre} — {simbolo}")
+    st.write(f"Tipo seleccionado: {tipo}")
+    st.write(
+        f"Moneda de cotización: {moneda or 'No disponible'}"
+    )
+    st.write(f"Precio disponible: {formato(precio)}")
+
+    if precio_de_historial:
+        st.caption(
+            "El precio mostrado procede del último cierre "
+            "ajustado disponible en el historial."
+        )
+
+    if not cierres.empty:
+        st.caption(
+            "Último registro del historial: "
+            + fecha_texto(cierres.index[-1])
+        )
+
+    if precio is None and cierres.empty:
+        st.warning(
+            "No se obtuvieron precios para este instrumento. "
+            "Revisá el ticker o intentá nuevamente más tarde."
+        )
+
+    if tipo == "CEDEAR":
+        st.warning(
+            f"BPA, PER y PEG corresponden a "
+            f"{ticker_fundamental}, no al certificado {simbolo}. "
+            "El BPA no se convierte por el ratio del CEDEAR."
+        )
+
+    bpa_anual, fecha_anual = extraer_bpa(anual)
+    bpa_ttm, fecha_ttm = extraer_bpa(ttm)
+
+    per = numero(info_fund.get("trailingPE"))
+    peg = numero(info_fund.get("trailingPegRatio"))
+    rsi = rsi_wilder(cierres)
+
+    filas = []
+    verdes = []
+
+    if es_fondo:
+        filas.append({
+            "Dato": "BPA diluido",
+            "Actual / TTM": "No aplica: fondo",
+            "Último ejercicio fiscal": "No aplica: fondo"
+        })
+
+        filas.append({
+            "Dato": "PER",
+            "Actual / TTM": "No disponible en esta versión",
+            "Último ejercicio fiscal": "—"
+        })
+
+        filas.append({
+            "Dato": "PEG",
+            "Actual / TTM": "No aplica en esta versión",
+            "Último ejercicio fiscal": "—"
+        })
+
+    else:
+        filas.append({
+            "Dato": "BPA diluido",
+            "Actual / TTM": formato(bpa_ttm),
+            "Último ejercicio fiscal": formato(bpa_anual)
+        })
+
+        filas.append({
+            "Dato": "PER histórico",
+            "Actual / TTM": formato(per),
+            "Último ejercicio fiscal": "—"
+        })
+
+        filas.append({
+            "Dato": "PEG de la fuente",
+            "Actual / TTM": formato(peg),
+            "Último ejercicio fiscal": "—"
+        })
+
+        if (
+            bpa_ttm is not None
+            and bpa_anual is not None
+            and fecha_ttm is not None
+            and fecha_anual is not None
+            and fecha_ttm > fecha_anual
+            and bpa_ttm > bpa_anual
+        ):
+            verdes.append(0)
+
+        if per is not None and 0 < per < 30:
+            verdes.append(1)
+
+        if peg is not None and 0 < peg < 1:
+            verdes.append(2)
+
+    filas.append({
+        "Dato": "RSI — 14 sesiones",
+        "Actual / TTM": formato(rsi),
+        "Último ejercicio fiscal": "—"
+    })
+
+    if rsi is not None and rsi < 40:
+        verdes.append(3)
+
+    tabla = pd.DataFrame(filas)
+
+    st.subheader("Indicadores")
+
+    tabla_con_colores = tabla.style.apply(
+        lambda datos: pintar_tabla(datos, verdes),
+        axis=None
+    )
+
+    st.dataframe(
+        tabla_con_colores,
+        hide_index=True,
+        use_container_width=True
+    )
+
+    if not es_fondo:
+        moneda_bpa = info_fund.get("financialCurrency")
+
+        st.caption(
+            f"Fundamentos de: {ticker_fundamental}. "
+            "Moneda contable del BPA: "
+            f"{moneda_bpa or 'No disponible'}."
+        )
+
+        st.caption(
+            "Ejercicio anual terminado el: "
+            f"{fecha_texto(fecha_anual)}. "
+            "TTM terminado el: "
+            f"{fecha_texto(fecha_ttm)}."
+        )
+
+        if fecha_anual is not None and fecha_ttm is not None:
+            if fecha_anual == fecha_ttm:
+                st.info(
+                    "El cierre anual y el TTM tienen la misma "
+                    "fecha. No se pinta el BPA porque no son "
+                    "períodos distintos."
+                )
+
+            elif fecha_ttm < fecha_anual:
+                st.warning(
+                    "El TTM disponible es anterior al cierre "
+                    "anual. No se pinta el BPA."
+                )
+
+        if bpa_ttm is None or bpa_anual is None:
+            st.info(
+                "Falta un BPA diluido comparable. "
+                "Los valores faltantes no se sustituyen por cero "
+                "ni por la suma de cuatro BPA trimestrales."
+            )
+
+        if peg is None:
+            st.caption(
+                "La fuente no entregó trailingPegRatio. "
+                "No se sustituye por otro cálculo de PEG."
+            )
+
+    if not cierres.empty:
+        st.subheader("Evolución del instrumento seleccionado")
+        st.line_chart(cierres)
+
+        st.caption(
+            "Gráfico y RSI calculados con cierres diarios "
+            "ajustados. El último registro puede pertenecer "
+            "a una sesión todavía en curso."
+        )
+
+    else:
+        st.warning(
+            "No se obtuvo historial para calcular "
+            "el RSI y el gráfico."
+        )
+
+    if es_fondo:
+        st.info(
+            "Vista de ETF: esta versión muestra cotización, "
+            "gráfico y RSI. No presenta BPA empresarial "
+            "ni un PER de cartera sin identificar."
+        )
+
+    if avisos:
+        with st.expander("Avisos de la fuente"):
+            for aviso in sorted(set(avisos)):
+                st.write("- " + aviso)
+
+    st.caption(
+        "El verde indica que se cumple tu filtro. "
+        "No equivale a una recomendación de compra."
+    )
+
+st.divider()
+
+st.caption(
+    "Los precios pueden tener demora. "
+    "La búsqueda y los estados financieros se reutilizan "
+    "durante una hora; las cotizaciones, cinco minutos. "
+    "No es una herramienta de tiempo real."
+)
