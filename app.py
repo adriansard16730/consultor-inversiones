@@ -14,11 +14,16 @@ st.info(
     "- RSI de 14 sesiones: menor que 40.\n"
     "- PEG: mayor que 0 y menor que 1.\n"
     "- PER histórico: mayor que 0 y menor que 30.\n"
-    "- BPA diluido: TTM mayor que el último ejercicio "
-    "fiscal cerrado, siempre que el TTM sea posterior.\n\n"
+    "- BPA anual/TTM: BPA TTM mayor que el último "
+    "ejercicio fiscal cerrado, con fecha TTM posterior.\n"
+    "- BPA trimestral: último BPA diluido trimestral "
+    "mayor que el del mismo trimestre del año anterior.\n\n"
+    "Si el TTM y el cierre anual coinciden, "
+    "la comparación anual/TTM queda sin verde. "
+    "La comparación trimestral se evalúa por separado.\n\n"
     "Los datos faltantes no se sustituyen por cero. "
     "En ETFs, BPA, PER y PEG no se evalúan en esta versión. "
-    "El verde indica que se cumple el filtro, "
+    "El verde indica que se cumple tu filtro, "
     "no una recomendación de compra."
 )
 st.caption("Versión de prueba 2 — cotizaciones sin caché")
@@ -224,7 +229,74 @@ def pintar_tabla(tabla, verdes):
         )
     return estilos
 
+def comparar_bpa_trimestral(simbolo):
+    try:
+        tabla = yf.Ticker(simbolo).quarterly_income_stmt
+    except Exception:
+        return None, None, None, None
 
+    if tabla is None or tabla.empty:
+        return None, None, None, None
+
+    fila = None
+    for nombre in ("Diluted EPS", "DilutedEPS"):
+        if nombre in tabla.index:
+            fila = nombre
+            break
+
+    if fila is None:
+        return None, None, None, None
+
+    serie = tabla.loc[fila]
+
+    if isinstance(serie, pd.DataFrame):
+        serie = serie.iloc[0]
+
+    registros = []
+    hoy = pd.Timestamp.now().date()
+
+    for columna, valor in serie.items():
+        try:
+            fecha = pd.Timestamp(columna)
+            importe = numero(valor)
+
+            if fecha.date() <= hoy and importe is not None:
+                registros.append((fecha, importe))
+        except Exception:
+            continue
+
+    if not registros:
+        return None, None, None, None
+
+    fecha_actual, bpa_actual = max(
+        registros,
+        key=lambda registro: registro[0]
+    )
+
+    objetivo = fecha_actual - pd.DateOffset(years=1)
+
+    # Permite pequeñas diferencias de fecha por calendarios fiscales.
+    candidatos = [
+        (fecha, importe)
+        for fecha, importe in registros
+        if fecha < fecha_actual
+        and abs((fecha - objetivo).days) <= 15
+    ]
+
+    if not candidatos:
+        return bpa_actual, fecha_actual, None, None
+
+    fecha_anterior, bpa_anterior = min(
+        candidatos,
+        key=lambda registro: abs((registro[0] - objetivo).days)
+    )
+
+    return (
+        bpa_actual,
+        fecha_actual,
+        bpa_anterior,
+        fecha_anterior
+    )
 # ---------- Buscador ----------
 
 st.subheader("1. Buscar instrumento")
@@ -498,7 +570,58 @@ if analizar:
     if rsi is not None and rsi < 40:
         verdes.append(3)
 
+        if not es_fondo:
+        with st.spinner("Comparando BPA trimestral..."):
+            (
+                bpa_tri_actual,
+                fecha_tri_actual,
+                bpa_tri_anterior,
+                fecha_tri_anterior
+            ) = comparar_bpa_trimestral(ticker_fundamental)
+
+        valor_tri_actual = formato(bpa_tri_actual)
+        valor_tri_anterior = formato(bpa_tri_anterior)
+
+        if fecha_tri_actual is not None:
+            valor_tri_actual += (
+                f" | cierre {fecha_texto(fecha_tri_actual)}"
+            )
+
+        if fecha_tri_anterior is not None:
+            valor_tri_anterior += (
+                f" | cierre {fecha_texto(fecha_tri_anterior)}"
+            )
+
+        indice_trimestral = len(filas)
+
+        filas.append({
+            "Dato": "BPA diluido — trimestre vs. mismo trimestre anterior",
+            "Actual / TTM": valor_tri_actual,
+            "Último ejercicio fiscal": valor_tri_anterior
+        })
+
+        if (
+            bpa_tri_actual is not None
+            and bpa_tri_anterior is not None
+            and bpa_tri_actual > bpa_tri_anterior
+        ):
+            verdes.append(indice_trimestral)
+
+        if (
+            bpa_tri_actual is None
+            or bpa_tri_anterior is None
+        ):
+            st.info(
+                "No se obtuvieron los dos BPA trimestrales "
+                "comparables. La fila trimestral queda sin verde."
+            )
+
     tabla = pd.DataFrame(filas)
+
+    tabla = tabla.rename(columns={
+        "Actual / TTM": "Actual / TTM",
+        "Último ejercicio fiscal": "Período de comparación"
+    })
 
     st.subheader("Indicadores")
 
