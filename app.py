@@ -304,3 +304,10 @@ if tipo == "CEDEAR":
     )
 
 analizar = st.button("Analizar instrumento", type="primary")
+# ---------- Análisis ----------
+
+if analizar:st.info("El botón funciona. Iniciando el análisis...")
+
+    if not simbolo:
+        st.warning("Primero elegí un resultado o escribí un ticker.")
+        st.stop()
