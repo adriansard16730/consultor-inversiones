@@ -111,7 +111,7 @@ def extraer_bpa(tabla):
     return importe, fecha
 
 
-@st.cache_data(ttl=3600, max_entries=100)
+
 def buscar_instrumentos(texto):
     resultados = []
     try:
@@ -581,6 +581,7 @@ st.divider()
 st.caption(
     "Los precios pueden tener demora. "
     "La búsqueda y los estados financieros se reutilizan "
-    "durante una hora; las cotizaciones, cinco minutos. "
+    "durante una hora. Las cotizaciones se consultan "
+    "al presionar Analizar instrumento. "
     "No es una herramienta de tiempo real."
 )
