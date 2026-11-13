@@ -1,242 +1,293 @@
+import math
 import pandas as pd
 import streamlit as st
 import yfinance as yf
 
 st.set_page_config(
     page_title="Mi consultor de inversiones",
-    layout="centered"
+    layout="wide"
 )
 
 st.title("Mi consultor de inversiones")
-st.write("Ingresá un ticker y elegí los datos que querés consultar.")
-
-st.info(
-    "Esta primera versión usa Yahoo Finance, no Google Finance. "
-    "La búsqueda es por ticker exacto, no por nombre de empresa."
+st.caption(
+    "Fuente: Yahoo Finance mediante yfinance. "
+    "No utiliza Stock Analysis."
 )
 
-CAMPOS = {
-    "Nombre": "longName",
-    "Moneda": "currency",
-    "Precio de mercado": "regularMarketPrice",
-    "Variación diaria (%)": "regularMarketChangePercent",
-    "Cierre anterior": "regularMarketPreviousClose",
-    "Apertura": "regularMarketOpen",
-    "Mínimo del día": "dayLow",
-    "Máximo del día": "dayHigh",
-    "Volumen": "volume",
-    "Capitalización de mercado": "marketCap",
-    "PER histórico": "trailingPE",
-    "Ganancia por acción": "trailingEps",
-    "Mínimo de 52 semanas": "fiftyTwoWeekLow",
-    "Máximo de 52 semanas": "fiftyTwoWeekHigh",
-    "Sector": "sector",
-    "Industria": "industry",
-}
+
+# ---------- Funciones auxiliares ----------
+
+def numero(valor):
+    try:
+        resultado = float(valor)
+        return resultado if math.isfinite(resultado) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def formato(valor):
+    valor = numero(valor)
+    if valor is None:
+        return "No disponible"
+    texto = f"{valor:,.2f}"
+    return texto.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def primero(*valores):
+    for valor in valores:
+        if valor is not None and valor != "":
+            return valor
+    return None
+
+
+def fecha_texto(fecha):
+    if fecha is None:
+        return "fecha no disponible"
+    return pd.Timestamp(fecha).strftime("%d/%m/%Y")
+
+
+def rsi_wilder(cierres, periodo=14):
+    precios = pd.to_numeric(cierres, errors="coerce").dropna()
+
+    if len(precios) < periodo + 1:
+        return None
+
+    cambios = precios.diff().dropna()
+    ganancias = cambios.clip(lower=0)
+    perdidas = -cambios.clip(upper=0)
+
+    media_ganancia = float(ganancias.iloc[:periodo].mean())
+    media_perdida = float(perdidas.iloc[:periodo].mean())
+
+    for i in range(periodo, len(cambios)):
+        media_ganancia = (
+            media_ganancia * (periodo - 1) + float(ganancias.iloc[i])
+        ) / periodo
+        media_perdida = (
+            media_perdida * (periodo - 1) + float(perdidas.iloc[i])
+        ) / periodo
+
+    if media_perdida == 0:
+        return 100.0 if media_ganancia > 0 else 50.0
+
+    rs = media_ganancia / media_perdida
+    return 100 - 100 / (1 + rs)
+
+
+def extraer_bpa(tabla):
+    if tabla is None or tabla.empty:
+        return None, None
+
+    fila = None
+    for nombre in ("Diluted EPS", "DilutedEPS"):
+        if nombre in tabla.index:
+            fila = nombre
+            break
+
+    if fila is None:
+        return None, None
+
+    serie = tabla.loc[fila]
+
+    if isinstance(serie, pd.DataFrame):
+        serie = serie.iloc[0]
+
+    candidatos = []
+    hoy = pd.Timestamp.now().date()
+
+    for columna, valor in serie.items():
+        try:
+            fecha = pd.Timestamp(columna)
+            importe = numero(valor)
+            if fecha.date() <= hoy and importe is not None:
+                candidatos.append((fecha, importe))
+        except Exception:
+            continue
+
+    if not candidatos:
+        return None, None
+
+    fecha, importe = max(candidatos, key=lambda x: x[0])
+    return importe, fecha
+
+
+@st.cache_data(ttl=3600, max_entries=100)
+def buscar_instrumentos(texto):
+    resultados = []
+    try:
+        resultados = yf.Search(
+            texto,
+            max_results=12,
+            news_count=0
+        ).quotes or []
+    except Exception:
+        pass
+
+    filas = []
+    vistos = set()
+
+    for item in resultados:
+        simbolo = item.get("symbol")
+        if not simbolo or simbolo in vistos:
+            continue
+
+        vistos.add(simbolo)
+        filas.append({
+            "symbol": simbolo,
+            "nombre": (
+                item.get("longname")
+                or item.get("shortname")
+                or simbolo
+            ),
+            "mercado": (
+                item.get("exchDisp")
+                or item.get("exchange")
+                or "Mercado no informado"
+            ),
+            "tipo": item.get("quoteType") or "Tipo no informado"
+        })
+
+    return filas
+
 
 @st.cache_data(ttl=300, max_entries=100)
-def consultar(ticker):
-    activo = yf.Ticker(ticker)
+def cargar_cotizacion(simbolo):
+    activo = yf.Ticker(simbolo)
+    avisos = []
 
     try:
         info = dict(activo.get_info() or {})
     except Exception:
         info = {}
+        avisos.append("No se pudo recuperar la ficha completa.")
 
     try:
         historial = activo.history(
-            period="6mo",
-            auto_adjust=False
+            period="1y",
+            interval="1d",
+            auto_adjust=True
         )
     except Exception:
         historial = pd.DataFrame()
+        avisos.append("No se pudo recuperar el historial.")
 
     try:
-        metadata = activo.get_history_metadata() or {}
+        meta = activo.get_history_metadata() or {}
     except Exception:
-        metadata = {}
+        meta = {}
 
-    # Completar solo los datos que falten.
-    equivalencias = {
-        "longName": "longName",
-        "shortName": "shortName",
-        "currency": "currency",
-        "exchange": "exchangeName",
-        "regularMarketPrice": "regularMarketPrice",
-    }
+    return info, historial, meta, avisos
 
-    for destino, origen in equivalencias.items():
-        if info.get(destino) is None:
-            valor = metadata.get(origen)
-            if valor is not None:
-                info[destino] = valor
 
-    if not info.get("longName"):
-        info["longName"] = (
-            info.get("shortName")
-            or metadata.get("shortName")
+@st.cache_data(ttl=3600, max_entries=100)
+def cargar_fundamentales(simbolo):
+    activo = yf.Ticker(simbolo)
+    avisos = []
+
+    try:
+        anual = activo.income_stmt
+    except Exception:
+        anual = pd.DataFrame()
+        avisos.append("No se obtuvo el estado de resultados anual.")
+
+    try:
+        ttm = activo.ttm_income_stmt
+    except Exception:
+        ttm = pd.DataFrame()
+        avisos.append("No se obtuvo el estado de resultados TTM.")
+
+    return anual, ttm, avisos
+
+
+def pintar_tabla(tabla, verdes):
+    estilos = pd.DataFrame(
+        "",
+        index=tabla.index,
+        columns=tabla.columns
+    )
+    for fila in verdes:
+        estilos.loc[fila, "Actual / TTM"] = (
+            "background-color: #d9ead3; color: #153b19;"
         )
-
-    # Si falta la variación de mercado, usar los
-    # dos últimos cierres diarios disponibles.
-    if not historial.empty:
-        cierres = historial["Close"].dropna()
-
-        if not cierres.empty:
-            if info.get("regularMarketPrice") is None:
-                info["regularMarketPrice"] = float(cierres.iloc[-1])
-
-        if len(cierres) >= 2:
-            ultimo = float(cierres.iloc[-1])
-            anterior = float(cierres.iloc[-2])
-
-            if info.get("regularMarketPreviousClose") is None:
-                info["regularMarketPreviousClose"] = anterior
-
-            if (
-                info.get("regularMarketChangePercent") is None
-                and anterior != 0
-            ):
-                info["regularMarketChangePercent"] = (
-                    (ultimo / anterior) - 1
-                ) * 100
-                info["_variacion_desde_historial"] = True
-
-    return info, historial
+    return estilos
 
 
-def formatear(valor, clave):
-    if valor is None:
-        return "No disponible"
+# ---------- Buscador ----------
 
-    if isinstance(valor, (int, float)):
-        if pd.isna(valor):
-            return "No disponible"
+st.subheader("1. Buscar instrumento")
 
-        if clave == "regularMarketChangePercent":
-            return f"{valor:+.2f}%"
-
-        if clave in ("volume", "marketCap"):
-            return f"{valor:,.0f}"
-
-        return f"{valor:,.2f}"
-
-    return str(valor)
-
-
-with st.form("buscador"):
-    ticker = st.text_input(
-        "Ticker",
-        placeholder="Ejemplo para probar: AAPL"
+with st.form("busqueda"):
+    texto = st.text_input(
+        "Nombre de empresa, fondo o ticker",
+        placeholder="Ejemplo: Apple, AAPL o un ticker local"
     )
-
-    elegidos = st.multiselect(
-        "¿Qué datos querés ver?",
-        options=list(CAMPOS.keys()),
-        default=[
-            "Nombre",
-            "Moneda",
-            "Precio de mercado",
-            "Variación diaria (%)"
-        ]
-    )
-
-    mostrar_grafico = st.checkbox(
-        "Mostrar gráfico de los últimos 6 meses",
-        value=True
-    )
-
-    buscar = st.form_submit_button("Buscar")
-
+    buscar = st.form_submit_button("Buscar coincidencias")
 
 if buscar:
-    simbolo = ticker.strip().upper()
-
-    if not simbolo:
-        st.warning("Primero escribí un ticker.")
-
-    elif not elegidos and not mostrar_grafico:
-        st.warning("Elegí al menos un dato o activá el gráfico.")
-
+    consulta = texto.strip()
+    if consulta:
+        st.session_state["coincidencias"] = buscar_instrumentos(consulta)
+        st.session_state.pop("seleccion_instrumento", None)
     else:
-        try:
-            with st.spinner("Consultando datos..."):
-                info, historial = consultar(simbolo)
+        st.warning("Escribí un nombre o ticker.")
 
-            precio = info.get("regularMarketPrice")
+coincidencias = st.session_state.get("coincidencias", [])
 
-            if precio is None:
-                precio = info.get("currentPrice")
+if coincidencias:
+    opciones = {
+        (
+            f"{item['nombre']} | {item['symbol']} | "
+            f"{item['mercado']} | {item['tipo']}"
+        ): item
+        for item in coincidencias
+    }
 
-            if precio is None and not historial.empty:
-                cierres = historial["Close"].dropna()
-                if not cierres.empty:
-                    precio = float(cierres.iloc[-1])
+    seleccion = st.selectbox(
+        "Seleccioná el resultado correcto",
+        list(opciones.keys()),
+        key="seleccion_instrumento"
+    )
 
-            if precio is None and historial.empty:
-                st.warning(
-                    "No se obtuvieron cotizaciones. "
-                    "Revisá el ticker o probá nuevamente más tarde."
-                )
-            else:
-                info["regularMarketPrice"] = precio
+    elegido = opciones[seleccion]
+    simbolo_elegido = elegido["symbol"]
+    tipo_detectado = str(elegido["tipo"]).upper()
+else:
+    simbolo_elegido = ""
+    tipo_detectado = ""
+    st.caption(
+        "Si no encontrás el instrumento, podés escribir "
+        "su ticker exacto en el campo de abajo."
+    )
 
-                nombre = (
-                    info.get("longName")
-                    or info.get("shortName")
-                    or simbolo
-                )
-
-                st.subheader(nombre)
-                st.caption(f"Símbolo consultado: {simbolo}")
-                if info.get("_variacion_desde_historial"):
-                    st.info(
-                        "La variación se calculó con los dos últimos "
-                        "cierres diarios disponibles del historial. "
-                        "El último registro puede corresponder a "
-                        "una sesión todavía en curso."
-                    )
-                filas = []
-
-                for etiqueta in elegidos:
-                    clave = CAMPOS[etiqueta]
-                    filas.append({
-                        "Dato": etiqueta,
-                        "Valor": formatear(info.get(clave), clave)
-                    })
-
-                if filas:
-                    tabla = pd.DataFrame(filas)
-                    st.dataframe(
-                        tabla,
-                        hide_index=True,
-                        use_container_width=True
-                    )
-
-                if mostrar_grafico:
-                    if not historial.empty:
-                        st.subheader("Cierre diario: últimos 6 meses")
-                        st.line_chart(historial["Close"])
-                    else:
-                        st.info("No hay historial disponible.")
-
-                st.caption(
-                    "La moneda es la informada por la fuente. "
-                    "Los precios se muestran sin conversión. "
-                    "Si no hay precio de mercado disponible, "
-                    "se usa el último cierre histórico."
-                )
-
-        except Exception:
-            st.error(
-                "No se pudo completar la consulta. Puede deberse "
-                "al ticker, a una interrupción de la fuente o "
-                "a un límite temporal de consultas."
-            )
-
-st.caption(
-    "Datos de Yahoo Finance mediante yfinance. "
-    "Las consultas se reutilizan durante 5 minutos. "
-    "No es una herramienta de cotizaciones en tiempo real "
-    "ni de asesoramiento financiero."
+ticker_manual = st.text_input(
+    "Ticker exacto manual (opcional; reemplaza al resultado elegido)",
+    placeholder="Escribilo tal como figura en Yahoo Finance"
 )
+
+simbolo = ticker_manual.strip().upper() or simbolo_elegido
+uso_manual = bool(ticker_manual.strip())
+
+st.subheader("2. Indicar qué instrumento vas a analizar")
+
+tipos = ["Acción", "CEDEAR", "ETF"]
+indice_tipo = 2 if tipo_detectado == "ETF" and not uso_manual else 0
+
+tipo = st.selectbox(
+    "Tipo de instrumento — revisá esta selección",
+    tipos,
+    index=indice_tipo
+)
+
+subyacente = ""
+tipo_subyacente = "Acción"
+
+if tipo == "CEDEAR":
+    st.info(
+        "El ticker principal debe ser el CEDEAR local. "
+        "El precio, gráfico y RSI serán los del CEDEAR. "
+        "Los fundamentos serán los del subyacente indicado abajo."
+    )
+
+    subyacente = st.text_input(
+        "Ticker exacto de la acción o ETF subyacente",
+        placeholder="Ejemplo: AAPL, si corresponde a ese
