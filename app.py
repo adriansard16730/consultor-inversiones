@@ -37,7 +37,11 @@ CAMPOS = {
 @st.cache_data(ttl=300, max_entries=100)
 def consultar(ticker):
     activo = yf.Ticker(ticker)
-    info = activo.get_info() or {}
+
+    try:
+        info = dict(activo.get_info() or {})
+    except Exception:
+        info = {}
 
     try:
         historial = activo.history(
@@ -46,6 +50,57 @@ def consultar(ticker):
         )
     except Exception:
         historial = pd.DataFrame()
+
+    try:
+        metadata = activo.get_history_metadata() or {}
+    except Exception:
+        metadata = {}
+
+    # Completar solo los datos que falten.
+    equivalencias = {
+        "longName": "longName",
+        "shortName": "shortName",
+        "currency": "currency",
+        "exchange": "exchangeName",
+        "regularMarketPrice": "regularMarketPrice",
+    }
+
+    for destino, origen in equivalencias.items():
+        if info.get(destino) is None:
+            valor = metadata.get(origen)
+            if valor is not None:
+                info[destino] = valor
+
+    if not info.get("longName"):
+        info["longName"] = (
+            info.get("shortName")
+            or metadata.get("shortName")
+        )
+
+    # Si falta la variación de mercado, usar los
+    # dos últimos cierres diarios disponibles.
+    if not historial.empty:
+        cierres = historial["Close"].dropna()
+
+        if not cierres.empty:
+            if info.get("regularMarketPrice") is None:
+                info["regularMarketPrice"] = float(cierres.iloc[-1])
+
+        if len(cierres) >= 2:
+            ultimo = float(cierres.iloc[-1])
+            anterior = float(cierres.iloc[-2])
+
+            if info.get("regularMarketPreviousClose") is None:
+                info["regularMarketPreviousClose"] = anterior
+
+            if (
+                info.get("regularMarketChangePercent") is None
+                and anterior != 0
+            ):
+                info["regularMarketChangePercent"] = (
+                    (ultimo / anterior) - 1
+                ) * 100
+                info["_variacion_desde_historial"] = True
 
     return info, historial
 
@@ -134,7 +189,13 @@ if buscar:
 
                 st.subheader(nombre)
                 st.caption(f"Símbolo consultado: {simbolo}")
-
+                if info.get("_variacion_desde_historial"):
+                    st.info(
+                        "La variación se calculó con los dos últimos "
+                        "cierres diarios disponibles del historial. "
+                        "El último registro puede corresponder a "
+                        "una sesión todavía en curso."
+                    )
                 filas = []
 
                 for etiqueta in elegidos:
