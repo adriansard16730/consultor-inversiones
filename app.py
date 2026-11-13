@@ -288,6 +288,13 @@ if tipo == "CEDEAR":
         "Los fundamentos serán los del subyacente indicado abajo."
     )
 
-    subyacente = st.text_input(
-        "Ticker exacto de la acción o ETF subyacente",
-        placeholder="Ejemplo: AAPL, si corresponde a ese
+            subyacente = st.text_input(
+        "Ticker del subyacente",
+        placeholder="Ejemplo: AAPL"
+    ).strip().upper()
+
+    tipo_subyacente = st.selectbox(
+        "El subyacente es",
+        ["Acción", "ETF"]
+    )
+    )
