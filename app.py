@@ -570,14 +570,18 @@ if analizar:
     if rsi is not None and rsi < 40:
         verdes.append(3)
 
-        if not es_fondo:
+            if not es_fondo:
         with st.spinner("Comparando BPA trimestral..."):
-            (
-                bpa_tri_actual,
-                fecha_tri_actual,
-                bpa_tri_anterior,
-                fecha_tri_anterior
-            ) = comparar_bpa_trimestral(ticker_fundamental)
+            resultado_trimestral = comparar_bpa_trimestral(
+                ticker_fundamental
+            )
+
+        (
+            bpa_tri_actual,
+            fecha_tri_actual,
+            bpa_tri_anterior,
+            fecha_tri_anterior
+        ) = resultado_trimestral
 
         valor_tri_actual = formato(bpa_tri_actual)
         valor_tri_anterior = formato(bpa_tri_anterior)
@@ -619,7 +623,6 @@ if analizar:
     tabla = pd.DataFrame(filas)
 
     tabla = tabla.rename(columns={
-        "Actual / TTM": "Actual / TTM",
         "Último ejercicio fiscal": "Período de comparación"
     })
 
