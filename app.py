@@ -9,6 +9,7 @@ st.set_page_config(
 )
 
 st.title("Mi consultor de inversiones")
+st.caption("Versión de prueba 2 — cotizaciones sin caché")
 st.caption(
     "Fuente: Yahoo Finance mediante yfinance. "
     "No utiliza Stock Analysis."
@@ -150,7 +151,7 @@ def buscar_instrumentos(texto):
     return filas
 
 
-@st.cache_data(ttl=300, max_entries=100)
+
 def cargar_cotizacion(simbolo):
     activo = yf.Ticker(simbolo)
     avisos = []
