@@ -9,6 +9,18 @@ st.set_page_config(
 )
 
 st.title("Mi consultor de inversiones")
+st.info(
+    "CONDICIONES PARA MARCAR EN VERDE\n\n"
+    "- RSI de 14 sesiones: menor que 40.\n"
+    "- PEG: mayor que 0 y menor que 1.\n"
+    "- PER histórico: mayor que 0 y menor que 30.\n"
+    "- BPA diluido: TTM mayor que el último ejercicio "
+    "fiscal cerrado, siempre que el TTM sea posterior.\n\n"
+    "Los datos faltantes no se sustituyen por cero. "
+    "En ETFs, BPA, PER y PEG no se evalúan en esta versión. "
+    "El verde indica que se cumple el filtro, "
+    "no una recomendación de compra."
+)
 st.caption("Versión de prueba 2 — cotizaciones sin caché")
 st.caption(
     "Fuente: Yahoo Finance mediante yfinance. "
