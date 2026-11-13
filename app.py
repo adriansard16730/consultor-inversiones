@@ -285,10 +285,10 @@ if tipo == "CEDEAR":
     st.info(
         "El ticker principal debe ser el CEDEAR local. "
         "El precio, gráfico y RSI serán los del CEDEAR. "
-        "Los fundamentos serán los del subyacente indicado abajo."
+        "Los fundamentos serán los del subyacente."
     )
 
-            subyacente = st.text_input(
+    subyacente = st.text_input(
         "Ticker del subyacente",
         placeholder="Ejemplo: AAPL"
     ).strip().upper()
@@ -297,4 +297,10 @@ if tipo == "CEDEAR":
         "El subyacente es",
         ["Acción", "ETF"]
     )
+
+    st.caption(
+        "La relación CEDEAR/subyacente es manual. "
+        "La app no la valida ni convierte importes por el ratio."
     )
+
+analizar = st.button("Analizar instrumento", type="primary")
